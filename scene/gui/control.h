@@ -228,6 +228,8 @@ private:
 		LayoutMode stored_layout_mode = LayoutMode::LAYOUT_MODE_POSITION;
 		bool stored_use_custom_anchors = false;
 
+		int padding[4] = { 0, 0, 0, 0 };
+
 		real_t offset[4] = { 0.0, 0.0, 0.0, 0.0 };
 		real_t anchor[4] = { ANCHOR_BEGIN, ANCHOR_BEGIN, ANCHOR_BEGIN, ANCHOR_BEGIN };
 		FocusMode focus_mode = FOCUS_NONE;
@@ -573,6 +575,8 @@ public:
 
 	void set_anchor(Side p_side, real_t p_anchor, bool p_keep_offset = true, bool p_push_opposite_anchor = true);
 	real_t get_anchor(Side p_side) const;
+	void set_padding(Side p_side, int p_padding);
+	int get_padding(Side p_side) const;
 	void set_offset(Side p_side, real_t p_value);
 	real_t get_offset(Side p_side) const;
 	void set_anchor_and_offset(Side p_side, real_t p_anchor, real_t p_pos, bool p_push_opposite_anchor = true);

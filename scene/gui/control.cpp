@@ -830,8 +830,12 @@ void Control::set_anchor(Side p_side, real_t p_anchor, bool p_keep_offset, bool 
 
 	Rect2 parent_rect = get_parent_anchorable_rect();
 	real_t parent_range = (p_side == SIDE_LEFT || p_side == SIDE_RIGHT) ? parent_rect.size.x : parent_rect.size.y;
-	real_t previous_pos = data.offset[p_side] + data.anchor[p_side] * parent_range;
-	real_t previous_opposite_pos = data.offset[(p_side + 2) % 4] + data.anchor[(p_side + 2) % 4] * parent_range;
+
+	int axis = p_side & 1;
+	real_t parent_position = parent_rect.position[axis];
+
+	real_t previous_pos = parent_position + data.offset[p_side] + data.anchor[p_side] * parent_range;
+	real_t previous_opposite_pos = parent_position + data.offset[(p_side + 2) % 4] + data.anchor[(p_side + 2) % 4] * parent_range;
 
 	data.anchor[p_side] = p_anchor;
 
@@ -845,11 +849,12 @@ void Control::set_anchor(Side p_side, real_t p_anchor, bool p_keep_offset, bool 
 	}
 
 	if (!p_keep_offset) {
-		data.offset[p_side] = previous_pos - data.anchor[p_side] * parent_range;
+		data.offset[p_side] = previous_pos - parent_position - data.anchor[p_side] * parent_range;
 		if (p_push_opposite_anchor) {
-			data.offset[(p_side + 2) % 4] = previous_opposite_pos - data.anchor[(p_side + 2) % 4] * parent_range;
+			data.offset[(p_side + 2) % 4] = previous_opposite_pos - parent_position - data.anchor[(p_side + 2) % 4] * parent_range;
 		}
 	}
+
 	if (is_inside_tree()) {
 		_size_changed();
 	}
@@ -862,6 +867,29 @@ real_t Control::get_anchor(Side p_side) const {
 	ERR_FAIL_INDEX_V(int(p_side), 4, 0.0);
 
 	return data.anchor[p_side];
+}
+
+void Control::set_padding(Side p_side, int p_padding) {
+	ERR_MAIN_THREAD_GUARD;
+	ERR_FAIL_INDEX((int)p_side, 4);
+	ERR_FAIL_COND(p_padding < 0);
+
+	if (data.padding[p_side] == p_padding) {
+		return;
+	}
+
+	data.padding[p_side] = p_padding;
+	update_minimum_size();
+	update_desired_size();
+	update_maximum_size();
+	_size_changed();
+}
+
+int Control::get_padding(Side p_side) const {
+	ERR_READ_THREAD_GUARD_V(0);
+	ERR_FAIL_INDEX_V((int)p_side, 4, 0);
+
+	return data.padding[p_side];
 }
 
 void Control::set_offset(Side p_side, real_t p_value) {
@@ -956,7 +984,8 @@ Control::GrowDirection Control::get_v_grow_direction() const {
 }
 
 void Control::_compute_layout_rect(Rect2 p_rect, bool p_keep_offsets) {
-	Size2 parent_rect_size = get_parent_anchorable_rect().size;
+	Rect2 parent_rect = get_parent_anchorable_rect();
+	Size2 parent_rect_size = parent_rect.size;
 
 	if (p_keep_offsets) {
 		// If computing anchors, we need to ensure the parent rect size is valid to avoid division by zero.
@@ -964,8 +993,8 @@ void Control::_compute_layout_rect(Rect2 p_rect, bool p_keep_offsets) {
 		ERR_FAIL_COND(parent_rect_size.y == 0.0);
 	}
 
-	real_t x = p_rect.position.x;
-	real_t y = p_rect.position.y;
+	real_t x = p_rect.position.x - parent_rect.position.x;
+	real_t y = p_rect.position.y - parent_rect.position.y;
 
 	if (_get_layout_mode() != LayoutMode::LAYOUT_MODE_CONTAINER) {
 		float left_grow_factor =
@@ -1650,7 +1679,14 @@ Rect2 Control::get_screen_rect() const {
 
 Rect2 Control::get_anchorable_rect() const {
 	ERR_READ_THREAD_GUARD_V(Rect2());
-	return Rect2(Point2(), get_size());
+
+	Size2 size = get_size();
+	size.x = MAX(size.x - data.padding[SIDE_LEFT] - data.padding[SIDE_RIGHT], 0);
+	size.y = MAX(size.y - data.padding[SIDE_TOP] - data.padding[SIDE_BOTTOM], 0);
+
+	return Rect2(
+			Point2(data.padding[SIDE_LEFT], data.padding[SIDE_TOP]),
+			size);
 }
 
 void Control::set_scale(const Vector2 &p_scale) {
@@ -1908,7 +1944,21 @@ Size2 Control::get_combined_maximum_size() const {
 }
 
 Size2 Control::get_inner_combined_maximum_size() const {
-	return get_combined_maximum_size();
+	Size2 max_size = get_combined_maximum_size();
+
+	if (max_size.x >= 0) {
+		max_size.x = MAX(
+				max_size.x - data.padding[SIDE_LEFT] - data.padding[SIDE_RIGHT],
+				0);
+	}
+
+	if (max_size.y >= 0) {
+		max_size.y = MAX(
+				max_size.y - data.padding[SIDE_TOP] - data.padding[SIDE_BOTTOM],
+				0);
+	}
+
+	return max_size;
 }
 
 void Control::set_parent_maximum_size_cache(const Size2 &p_parent_max) {
@@ -2008,6 +2058,9 @@ Size2 Control::get_custom_minimum_size() const {
 
 void Control::_update_desired_size_cache() const {
 	Size2 desired_size = get_desired_size();
+	desired_size += Size2(
+			data.padding[SIDE_LEFT] + data.padding[SIDE_RIGHT],
+			data.padding[SIDE_TOP] + data.padding[SIDE_BOTTOM]);
 
 	data.desired_size_cache = desired_size;
 	data.desired_size_valid = true;
@@ -2187,6 +2240,9 @@ void Control::call_on_all_layout_pending_finished(const Callable &p_callable) {
 void Control::_update_minimum_size_cache() const {
 	Size2 minsize = get_minimum_size();
 	minsize = minsize.max(data.custom_minimum_size);
+	minsize += Size2(
+			data.padding[SIDE_LEFT] + data.padding[SIDE_RIGHT],
+			data.padding[SIDE_TOP] + data.padding[SIDE_BOTTOM]);
 
 	data.minimum_size_cache = minsize;
 	data.minimum_size_valid = true;
@@ -2226,6 +2282,10 @@ void Control::_size_changed() {
 	for (int i = 0; i < 4; i++) {
 		real_t area = parent_rect.size[i & 1];
 		edge_pos[i] = data.offset[i] + (data.anchor[i] * area);
+
+		if (i == 0 || i == 1) {
+			edge_pos[i] += parent_rect.position[i & 1];
+		}
 	}
 
 	Point2 new_pos_cache = Point2(edge_pos[0], edge_pos[1]);
@@ -2255,7 +2315,7 @@ void Control::_size_changed() {
 	}
 
 	if (is_layout_rtl()) {
-		new_pos_cache.x = parent_rect.size.x + 2 * parent_rect.position.x - new_pos_cache.x - new_size_cache.x;
+		new_pos_cache.x = parent_rect.position.x + parent_rect.size.x - new_pos_cache.x - new_size_cache.x;
 	}
 
 	if (minimum_size.height > new_size_cache.height) {
@@ -4895,6 +4955,9 @@ void Control::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_v_size_flags", "flags"), &Control::set_v_size_flags);
 	ClassDB::bind_method(D_METHOD("get_v_size_flags"), &Control::get_v_size_flags);
 
+	ClassDB::bind_method(D_METHOD("set_padding", "side", "padding"), &Control::set_padding);
+	ClassDB::bind_method(D_METHOD("get_padding", "side"), &Control::get_padding);
+
 	ClassDB::bind_method(D_METHOD("set_offset_transform_enabled", "enabled"), &Control::set_offset_transform_enabled);
 	ClassDB::bind_method(D_METHOD("is_offset_transform_enabled"), &Control::is_offset_transform_enabled);
 	ClassDB::bind_method(D_METHOD("set_offset_transform_position", "offset"), &Control::set_offset_transform_position);
@@ -5118,6 +5181,12 @@ void Control::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2, "scale"), "set_scale", "get_scale");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2, "pivot_offset", PROPERTY_HINT_NONE, "suffix:px"), "set_pivot_offset", "get_pivot_offset");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2, "pivot_offset_ratio"), "set_pivot_offset_ratio", "get_pivot_offset_ratio");
+
+	ADD_SUBGROUP("Padding", "padding_");
+	ADD_PROPERTYI(PropertyInfo(Variant::INT, "padding_left", PROPERTY_HINT_RANGE, "0,16384,1,suffix:px"), "set_padding", "get_padding", SIDE_LEFT);
+	ADD_PROPERTYI(PropertyInfo(Variant::INT, "padding_top", PROPERTY_HINT_RANGE, "0,16384,1,suffix:px"), "set_padding", "get_padding", SIDE_TOP);
+	ADD_PROPERTYI(PropertyInfo(Variant::INT, "padding_right", PROPERTY_HINT_RANGE, "0,16384,1,suffix:px"), "set_padding", "get_padding", SIDE_RIGHT);
+	ADD_PROPERTYI(PropertyInfo(Variant::INT, "padding_bottom", PROPERTY_HINT_RANGE, "0,16384,1,suffix:px"), "set_padding", "get_padding", SIDE_BOTTOM);
 
 	ADD_SUBGROUP("Container Sizing", "size_flags_");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "size_flags_horizontal", PROPERTY_HINT_FLAGS, "Fill:1,Expand:2,Shrink Center:4,Shrink End:8,Maximize:16"), "set_h_size_flags", "get_h_size_flags");
